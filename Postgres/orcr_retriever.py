@@ -3,8 +3,8 @@ import asyncpg
 
 class ORCR_Retriever:
     async def run(self,rank,category,gender):
-        conn = await asyncpg.connect(user='postgres', password='postgres',
-                                    database='orcrdb', host='127.0.0.1',port=5555)
+        conn = await asyncpg.connect(user='username', password='password',
+                                    database='database', host='127.0.0.1',port=5555)
         values = await conn.fetch(
             "SELECT * FROM seat_allocation WHERE seat_type =$1 AND gender=$2",category,gender 
         
