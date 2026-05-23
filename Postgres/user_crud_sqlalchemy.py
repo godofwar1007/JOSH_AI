@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime,timezone
 from typing import Optional, List, Dict, Any
 import enum
 from fastapi import FastAPI,Depends,HTTPException
@@ -41,7 +41,7 @@ class User(Base):
     name:Mapped[str]=mapped_column(String(100),nullable=False)
     email:Mapped[str]=mapped_column(String(100),unique=True,index=True,nullable=False)
     adv_rank:Mapped[int]=mapped_column(Integer,nullable=False)
-    mains_rank:Mapped[int]=mapped_column(Integer,nullable=True)
+    mains_rank:Mapped[Optional[int]]=mapped_column(Integer,nullable=True)
     category:Mapped[Category]=mapped_column(nullable=False)
     gender:Mapped[Gender]=mapped_column(nullable=False)
     preferred_branches:Mapped[List[str]]=mapped_column(JSON,default=list)
@@ -88,7 +88,7 @@ class response_schema(BaseModel):
     usage:usage_schema
 
     class Config:
-        form_attributes=True # so apparantly this is essential so that orm to convert the db response to format that 
+        from_attributes=True # so apparantly this is essential so that orm to convert the db response to format that 
                              # that our endpoint expects ....which is Pydantic i guess
 
 async def create_user(db:AsyncSession,user_data:create_schema) -> User:
@@ -99,7 +99,8 @@ async def create_user(db:AsyncSession,user_data:create_schema) -> User:
         email=user_data.email,
         adv_rank=user_data.adv_rank,
         mains_rank=user_data.mains_rank,
-        category=user_data.gender,
+        category=user_data.category,
+        gender=user_data.gender,
         preferred_branches=user_data.preferred_branches,
         queries_today=usage.queries_today,
         cooldown_until=usage.cooldown_until,
@@ -150,7 +151,7 @@ async def update_user(db:AsyncSession,user_id:int,update_data:upadate_schema) ->
         user.cooldown_until = update_data.usage.cooldown_until
         user.last_query = update_data.usage.last_query
 
-    user.updated_at=func.now()
+    # user.updated_at=datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(user)
     print("user updated :D")
@@ -169,15 +170,107 @@ async def delete_user(db: AsyncSession, user_id: int)->bool:
         print("user not found :(")
         return False 
         
-async def get_db()-> AsyncSession:  # func to provide the session to fastapi request
+async def get_db():  # func to provide the session to fastapi request
     async with LocalSession() as session:
-        return session
+        yield session
+
+# fastapi endpoints for our db functions 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    await engine.dispose()
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/users",response_model=response_schema)
+async def register_user(user_in:create_schema,db:AsyncSession=Depends(get_db)):
+    exists = await get_by_email(db,user_in.email)
+    if exists:
+        raise HTTPException(status_code=400,detail="Email already registered")
+    new_user=await create_user(db,user_in)
+
+    result = response_schema(
+        id=new_user.id,
+        name=new_user.name,
+        email=new_user.email,
+        adv_rank=new_user.adv_rank,
+        mains_rank=new_user.mains_rank,
+        category=new_user.category,
+        gender=new_user.gender,
+        preferred_branches=new_user.preferred_branches,
+        updated_at=new_user.updated_at,
+        usage=usage_schema(
+            queries_today=new_user.queries_today,
+            cooldown_until=new_user.cooldown_until,
+            last_query=new_user.last_query,
+        )
+    )
+
+    return result 
+
+@app.get("/users/{user_id}",response_model=response_schema)
+async def fetch_user(user_id:int,db:AsyncSession=Depends(get_db)):
+    user=await get_by_id(db,user_id)
+
+    if not user:
+        raise HTTPException(status_code=404,detail="User not found")
     
+    result=response_schema(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        adv_rank=user.adv_rank,
+        mains_rank=user.mains_rank,
+        category=user.category,
+        gender=user.gender,
+        preferred_branches=user.preferred_branches,
+        updated_at=user.updated_at,
+        usage=usage_schema(
+            queries_today=user.queries_today,
+            cooldown_until=user.cooldown_until,
+            last_query=user.last_query,
+        )
+    )
     
+    return result 
 
+@app.patch("/users/{user_id}",response_model=response_schema)
+async def modify_user(user_id: int,user_update:upadate_schema,db:AsyncSession=Depends(get_db)):
+    updated=await update_user(db,user_id,user_update)
+    if not updated:
+        raise HTTPException(status_code=404,detail="User not founf")
+    
+    result=response_schema(
+        id=updated.id,
+        name=updated.name,
+        email=updated.email,
+        adv_rank=updated.adv_rank,
+        mains_rank=updated.mains_rank,
+        category=updated.category,
+        gender=updated.gender,
+        preferred_branches=updated.preferred_branches,
+        updated_at=updated.updated_at,
+        usage=usage_schema(
+            queries_today=updated.queries_today,
+            cooldown_until=updated.cooldown_until,
+            last_query=updated.last_query,
+        )
+    )
 
+    return result 
 
+@app.delete("/users/{user_id}")
+async def remove_user(user_id:int,db:AsyncSession=Depends(get_db)):
+    deleted = await delete_user(db,user_id)
+    if not deleted:
+        raise HTTPException(status_code=404,detail="User not found")
+    
+    return {"message":"User deleted succesfully"}
 
-
-
-
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
