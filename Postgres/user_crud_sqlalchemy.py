@@ -7,6 +7,7 @@ from pydantic import BaseModel,EmailStr,Field
 from sqlalchemy import String,Integer,JSON,select,update,delete,func
 from sqlalchemy.ext.asyncio import create_async_engine,async_sessionmaker,AsyncSession
 from sqlalchemy.orm import DeclarativeBase,Mapped,mapped_column
+from sqlalchemy import Enum as SAEnum
 
 # database setup 
 db_url="postgresql+asyncpg://postgres:mysecretpassword@localhost/orcr_data"
@@ -42,8 +43,14 @@ class User(Base):
     email:Mapped[str]=mapped_column(String(100),unique=True,index=True,nullable=False)
     adv_rank:Mapped[int]=mapped_column(Integer,nullable=False)
     mains_rank:Mapped[Optional[int]]=mapped_column(Integer,nullable=True)
-    category:Mapped[Category]=mapped_column(nullable=False)
-    gender:Mapped[Gender]=mapped_column(nullable=False)
+    category: Mapped[Category] = mapped_column(
+        SAEnum(Category,values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
+    gender: Mapped[Gender] = mapped_column(
+        SAEnum(Gender, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
     preferred_branches:Mapped[List[str]]=mapped_column(JSON,default=list)
     
     queries_today: Mapped[int] = mapped_column(Integer, default=0)
