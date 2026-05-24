@@ -394,7 +394,7 @@ async def main():
         try:
             result = await agent.chat(
                 user_message=user_input,
-                user_id="iit_dev_001",
+                user_email="iit_dev_001@gmail.com",
                 short_term_memory=current_short_term_memory
             )
             
