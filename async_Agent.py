@@ -3,7 +3,7 @@ import uuid
 import os
 import requests
 import wikipedia
-from typing import TypedDict, Annotated, Literal,cast
+from typing import TypedDict, Annotated, Literal,cast,Optional,List,Dict,Any
 from datetime import datetime
 
 from langgraph.graph import StateGraph, START, END
@@ -12,16 +12,45 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from dotenv import load_dotenv
-from pydantic import SecretStr
+from pydantic import SecretStr,EmailStr,BaseModel
 import httpx
 import asyncpg
 
 
 from Asyncrulesretriever import rulesretriever
 from orcr_retriever import ORCR_Retriever
-from user_crud_asyncpg import init_db_pool,close_db_pool,get_by_id,get_by_email,pool,get_pool,upadate_schema,usage_schema,update_user
+from user_crud_asyncpg import init_db_pool,close_db_pool,get_by_id,get_by_email,pool,get_pool,upadate_schema,usage_schema,update_user,create_schema,Category,Gender,create_user
 
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import uvicorn 
 load_dotenv()
+
+agent_instance=None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global agent_instance
+    print("Initializing database pool")
+    await init_db_pool()
+    print("Initializing agent")
+    agent_instance=OrchestratorAgent(window_size=5)
+    await agent_instance.initialize()
+    print("agent ready")
+    yield
+    print("Closing database pool")
+    await close_db_pool()
+
+app=FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 josaa_retriever = None
 
@@ -500,5 +529,84 @@ async def main():
 
     await close_db_pool()        
 
+class ChatRequest(BaseModel):
+    query:str
+    email:EmailStr
+    session_id:Optional[str] = None
+    name:Optional[str] = None
+    adv_rank:Optional[int] = None
+    mains_rank:Optional[int] = None
+    category:Optional[str]="OPEN"
+    gender:Optional[str]="Gender-Neutral"
+    preferred_branches:Optional[List[str]]=[]
+
+
+SESSION_STORAGE: Dict[str,Dict[str,Any]]={}
+@app.post("/chat")
+async def joshai(request:ChatRequest):
+    if agent_instance is None:
+        raise HTTPException(status_code=503, detail="Agent not initialised.")
+
+
+    global SESSION_STORAGE
+
+    session_id=request.session_id or "default_session"
+    email=request.email
+
+    pool=get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503,detail="Database not ready")
+
+    async with pool.acquire() as conn:
+        user = await get_by_email(conn, email)
+        if user is None:
+            usage = usage_schema(queries_today=0, cooldown_until=None, last_query=None)
+
+            category_enum = Category(request.category) if request.category else Category.OPEN
+            gender_enum = Gender(request.gender) if request.gender else Gender("Gender-Neutral")
+
+
+            user_data = create_schema(
+                name=request.name or email.split("@")[0],
+                email=email,
+                adv_rank=request.adv_rank or 0,
+                mains_rank=request.mains_rank,
+                category=category_enum,
+                gender=gender_enum,
+                preferred_branches=request.preferred_branches or [],
+                usage=usage
+            )
+            user = await create_user(conn, user_data)
+            print(f"Created new user: {user.name} (id={user.id})")
+        else:
+            print(f"Existing user: {user.name} (id={user.id})")
+        user_id = user.id
+
+    session_data = SESSION_STORAGE.get(session_id, {"memory": [], "summary": ""})
+    short_term_memory = session_data["memory"]
+    summary = session_data["summary"]
+
+    result=await agent_instance.chat(
+        user_message=request.query,
+        user_id=user_id,
+        session_id=session_id,
+        short_term_memory=short_term_memory,
+        summary=summary
+    )
+    
+    SESSION_STORAGE[session_id]={
+        "memory": result["updated_memory"],
+        "summary": result["summary"]
+    }
+
+    ai_response = result["output_json"].get("output", {}).get("response", "")
+    return {"ans": f"\n AI:\n{ai_response}\n"}
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "server":
+        # Run FastAPI server
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    else:
+        # Run CLI chat
+        asyncio.run(main())
