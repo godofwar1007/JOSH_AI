@@ -33,7 +33,15 @@ async def get_josaa_retriver():
 
 @tool
 async def search_josaa_rules(query:str)-> str:
-    """" Search the Josaa rules and guidelines"""
+    """"
+      Retrieve official JoSAA counselling rules, seat allocation policies, fee structure,
+    document verification, and other procedural guidelines.
+    Use this tool for any question about JoSAA rules, not for rank-based college prediction.
+    
+    Args:
+        query: The specific rule or policy question, e.g., "seat acceptance fee", "document verification deadline".
+    
+    """
     print(f"    [Tool Execution] Searching JoSAA rules for: {query}")
     try:
 
@@ -62,7 +70,14 @@ async def get_orcr_retriever():
 @tool
 async def search_orcr_colleges(rank: int,category: str,gender:str)->str:
     """
-    Predict possible colleges based on JoSAA ORCR (Opening/Closing Rank) data.Use when user asks for college prediction based on rank, category, gender.
+      Predict possible colleges based on JoSAA opening/closing rank data.
+    Use this when the user asks for college prediction, seat chances, or which IIT/NIT they might get.
+    Do NOT use for rules or fee queries.
+    
+    Args:
+        rank: User's JEE Advanced rank (integer).
+        category: Seat category like "OPEN", "OBC-NCL", "SC", "ST", "EWS".
+        gender: "Gender-Neutral" or "Female-only".
     """    
     print(f"   [Tool Execution] ORCR prediction for rank={rank}, category={category}, gender={gender}")
 
@@ -394,7 +409,7 @@ async def main():
         try:
             result = await agent.chat(
                 user_message=user_input,
-                user_email="iit_dev_001@gmail.com",
+                user_id="iit_dev_001",
                 short_term_memory=current_short_term_memory
             )
             
