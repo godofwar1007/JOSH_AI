@@ -105,8 +105,8 @@ async def search_orcr_colleges(rank: int,category: str,gender:str)->str:
     
     Args:
         rank: User's JEE Advanced rank (integer).
-        category: Seat category like "OPEN", "OBC-NCL", "SC", "ST", "EWS".
-        gender: "Gender-Neutral" or "Female-only".
+        category: Seat category like "OPEN", "OBC-NCL", "SC", "ST", "EWS","OPEN(Pwd)", "OBC-NCL(Pwd)", "SC(Pwd)", "ST(Pwd)", "EWS(Pwd)",.
+        gender: "Male" or "Female".
     """    
     print(f"   [Tool Execution] ORCR prediction for rank={rank}, category={category}, gender={gender}")
 
