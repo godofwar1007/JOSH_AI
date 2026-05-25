@@ -182,6 +182,8 @@ class AgentState(TypedDict):
     current_input: str
     final_response: str
     output_json: dict
+    summary: str
+
 
 
 class OrchestratorAgent:
@@ -206,6 +208,14 @@ class OrchestratorAgent:
             api_key=groq_api_key
          ).bind_tools(self.tools)
         
+        self.summarizer = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            api_key=groq_api_key
+         )
+
+
+
         self.graph = self._build_graph()
 
     
@@ -267,6 +277,11 @@ class OrchestratorAgent:
         """
         
         convmsg = [SystemMessage(content=system_prompt)]
+
+        summary_text=state.get("summary","")
+        if summary_text:
+            convmsg.append(SystemMessage(content=f"Previous conversation summary (older messages):\n{summary_text}"))
+
         for memory_item in state.get("short_term_memory", []):
             if memory_item["role"] == "user":
                 convmsg.append(HumanMessage(content=memory_item["content"]))
@@ -339,9 +354,16 @@ class OrchestratorAgent:
         current_memory.append({"role": "user", "content": state["current_input"]})
         current_memory.append({"role": "ai", "content": final_ai_response})
         
-        max_messages = self.window_size * 2
-        if len(current_memory) > max_messages:
-            current_memory = current_memory[-max_messages:]
+        max_messages = 12
+        old_summary = state.get("summary", "")
+        new_summary = old_summary
+
+        if len(current_memory) >=12:
+            keep=len(current_memory)//2
+            deleted = current_memory[:-keep]
+            remaining = current_memory[-keep:]
+            new_summary = await self.summarizer_messages(deleted, old_summary)
+            current_memory = remaining
             print(f"   Trimming memory to last {self.window_size} turns.")
 
         pool=get_pool()
@@ -362,7 +384,8 @@ class OrchestratorAgent:
         return {
                     "short_term_memory": current_memory,
                     "turn_count": state.get("turn_count", 0) + 1,
-                    "final_response": final_ai_response
+                    "final_response": final_ai_response,
+                    "summary":new_summary
                 }  
     
     def _format_output_node(self, state: AgentState) -> dict:
@@ -379,22 +402,58 @@ class OrchestratorAgent:
         }
         return {"output_json": output_json}
     
+    async def summarizer_messages(self, messages: list[dict], existing_summary: str = "")->str:
+        
+        print(f"   SUMMARIZER: called with {len(messages)} messages")
+        if not messages:
+            return existing_summary
+        
+        conv_text = ""
+        for msg in messages:
+            role = "User" if msg["role"]=="user" else "Assistant"
+            conv_text+=f"{role}: {msg['content']}\n"
+
+        prompt=f"""Previous summary (if any):
+                   {existing_summary if existing_summary else "None"}
+
+                   New conversation excerpt:
+                   {conv_text}
+
+                   Please produce a very concise summary (max 300 tokens) of the new excerpt, integrating it with the previous summary. Keep key facts, user preferences, decisions, and any important information."""    
+        
+        try:
+            response = await self.summarizer.ainvoke([
+                SystemMessage(content="You are a summarisation assistant. Keep summaries brief and factual."),
+                HumanMessage(content=prompt)
+            ])
+            # Safely extract content as string
+            if hasattr(response, 'content') and isinstance(response.content, str):
+                return response.content.strip()
+            else:
+                return str(response).strip()
+        except Exception as e:
+            print(f"   Summarization failed: {e}. Keeping existing summary.")
+            return existing_summary
+
+    
     def _route_after_agent(self, state: AgentState) -> Literal["tools", "save_memory"]:
         last_message = state["messages"][-1]
         return "tools" if hasattr(last_message, "tool_calls") and last_message.tool_calls else "save_memory"
 
-    async def chat(self, user_message: str, user_id: int, session_id: str = None, short_term_memory: list = None) -> dict:
+    async def chat(self, user_message: str, user_id: int, session_id: str = None, short_term_memory: list = None, summary: str = "") -> dict:
         initial_state = {
             "messages": [],
             "short_term_memory": short_term_memory or [],
             "session_id": session_id or str(uuid.uuid4()),
             "user_id": user_id,
             "current_input": user_message,
+            "summary":summary
         }
         final_state = await self.graph.ainvoke(initial_state)
         return {
             "output_json": final_state["output_json"],
-            "updated_memory": final_state["short_term_memory"]
+            "updated_memory": final_state["short_term_memory"],
+            "summary": final_state.get("summary","")
         }
 
 #main function
@@ -410,7 +469,8 @@ async def main():
         print(f"Agent initialization faled{e}")    
         return 
     
-    current_short_term_memory = [] 
+    current_short_term_memory = []
+    current_summary=""
     
 
    
@@ -424,10 +484,12 @@ async def main():
             result = await agent.chat(
                 user_message=user_input,
                 user_id=2,
-                short_term_memory=current_short_term_memory
+                short_term_memory=current_short_term_memory,
+                summary=current_summary
             )
             
             current_short_term_memory = result["updated_memory"]
+            current_summary=result["summary"]
             ai_response = result["output_json"].get("output", {}).get("response", "")
             
             print(f"\n AI:\n{ai_response}\n")
