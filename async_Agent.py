@@ -174,12 +174,11 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     short_term_memory: list  
     session_id: str
-    user_id: str
-    user_email:str
+    user_id: int
     turn_count: int
     tools_used: list
     api_calls_count: int
-    errors: list
+    errors: list    
     current_input: str
     final_response: str
     output_json: dict
@@ -240,7 +239,7 @@ class OrchestratorAgent:
         pool=get_pool()
         if pool is not None:
             async with pool.acquire() as conn:
-                user_profile=await get_by_email(cast(asyncpg.Connection,conn),state["user_email"])
+                user_profile=await get_by_id(cast(asyncpg.Connection,conn),state["user_id"])
 
         if user_profile:
             user_info = f"""
@@ -328,7 +327,7 @@ class OrchestratorAgent:
                 
         return {"messages": tool_results, "tools_used": tools_used, "errors": errors}
     
-    def _save_memory_node(self, state: AgentState) -> dict:
+    async def _save_memory_node(self, state: AgentState) -> dict:
         print("\n[SAVE MEMORY NODE]")
         final_ai_response = ""
         for msg in reversed(state["messages"]):
@@ -344,12 +343,27 @@ class OrchestratorAgent:
         if len(current_memory) > max_messages:
             current_memory = current_memory[-max_messages:]
             print(f"   Trimming memory to last {self.window_size} turns.")
+
+        pool=get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                user=await get_by_id(cast(asyncpg.Connection,conn),state["user_id"])
+                if user:
+                    new_usage=usage_schema(
+                        queries_today=user.usage.queries_today+1,
+                        cooldown_until=user.usage.cooldown_until,
+                        last_query=datetime.now()
+                    )
+                    update_data=upadate_schema(usage=new_usage)
+                    await update_user(cast(asyncpg.Connection,conn),user.id,update_data)
+
+ 
         
         return {
-            "short_term_memory": current_memory,
-            "turn_count": state.get("turn_count", 0) + 1,
-            "final_response": final_ai_response
-        }
+                    "short_term_memory": current_memory,
+                    "turn_count": state.get("turn_count", 0) + 1,
+                    "final_response": final_ai_response
+                }  
     
     def _format_output_node(self, state: AgentState) -> dict:
         print("\n[FORMAT OUTPUT NODE]")
@@ -369,7 +383,7 @@ class OrchestratorAgent:
         last_message = state["messages"][-1]
         return "tools" if hasattr(last_message, "tool_calls") and last_message.tool_calls else "save_memory"
 
-    async def chat(self, user_message: str, user_id: str, session_id: str = None, short_term_memory: list = None) -> dict:
+    async def chat(self, user_message: str, user_id: int, session_id: str = None, short_term_memory: list = None) -> dict:
         initial_state = {
             "messages": [],
             "short_term_memory": short_term_memory or [],
@@ -409,7 +423,7 @@ async def main():
         try:
             result = await agent.chat(
                 user_message=user_input,
-                user_id="iit_dev_001",
+                user_id=2,
                 short_term_memory=current_short_term_memory
             )
             
@@ -421,6 +435,8 @@ async def main():
             
         except Exception as e:
             print(f"\n Execution Error: {e}\n")
+
+    await close_db_pool()        
 
 if __name__ == "__main__":
     asyncio.run(main())
