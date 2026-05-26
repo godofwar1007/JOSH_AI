@@ -319,3 +319,6 @@ async def remove_user(user_id:int, conn:asyncpg.Connection=Depends(get_conn)):
     if not deleted:
         raise HTTPException(404, "User not found")
     return {"message": "User deleted"}
+
+def get_pool():
+    return pool
