@@ -406,7 +406,7 @@ class OrchestratorAgent:
                         last_query=datetime.now()
                     )
                     update_data=upadate_schema(usage=new_usage)
-                    await update_user(cast(asyncpg.Connection,conn),user.id,update_data)
+                    await update_user(cast(asyncpg.Connection,conn),user.email,update_data)
 
  
         
@@ -541,14 +541,13 @@ class ChatRequest(BaseModel):
     preferred_branches:Optional[List[str]]=[]
 
 
-SESSION_STORAGE: Dict[str,Dict[str,Any]]={}
+
 @app.post("/chat")
 async def joshai(request:ChatRequest):
     if agent_instance is None:
         raise HTTPException(status_code=503, detail="Agent not initialised.")
 
 
-    global SESSION_STORAGE
 
     session_id=request.session_id or "default_session"
     email=request.email
@@ -574,7 +573,9 @@ async def joshai(request:ChatRequest):
                 category=category_enum,
                 gender=gender_enum,
                 preferred_branches=request.preferred_branches or [],
-                usage=usage
+                usage=usage,
+                short_term_memory=[],
+                summary=""
             )
             user = await create_user(conn, user_data)
             print(f"Created new user: {user.name} (id={user.id})")
@@ -582,9 +583,8 @@ async def joshai(request:ChatRequest):
             print(f"Existing user: {user.name} (id={user.id})")
         user_id = user.id
 
-    session_data = SESSION_STORAGE.get(session_id, {"memory": [], "summary": ""})
-    short_term_memory = session_data["memory"]
-    summary = session_data["summary"]
+    short_term_memory = user.short_term_memory or []
+    summary = user.summary or ""
 
     result=await agent_instance.chat(
         user_message=request.query,
@@ -594,10 +594,21 @@ async def joshai(request:ChatRequest):
         summary=summary
     )
     
-    SESSION_STORAGE[session_id]={
-        "memory": result["updated_memory"],
-        "summary": result["summary"]
-    }
+    new_memory=result["updated_memory"]
+    new_summary=result["summary"]
+
+    async with pool.acquire() as conn:
+        update_data=upadate_schema(
+            short_term_memory=new_memory,
+            summary=new_summary,
+        )
+
+        updated_user=await update_user(conn,email,update_data)
+        if not updated_user:
+            print(f"Failed to update user {email} memory in DB")
+        else:
+            print(f"Updated memory for {email} ")
+    
 
     ai_response = result["output_json"].get("output", {}).get("response", "")
     return {"ans": f"\n AI:\n{ai_response}\n"}
