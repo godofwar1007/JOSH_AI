@@ -3,17 +3,18 @@ import asyncpg
 
 s=[250,120,120,60,30,15]
 h=[800,400,400,200,120,40]
-class ORCR_Retriever:
-    async def runa(self,ja_rank,category,gender):#for advanced rank
-        conn = await asyncpg.connect(user='postgres', password='postgres',
-                                    database='orcr_data', host='127.0.0.1',port=5555)
-        values = await conn.fetch(
-            "SELECT * FROM seat_allocation WHERE seat_type =$1 AND gender=$2 AND rank='adv'",category,gender 
-        
-        )
-        
 
-        l=[]
+DB_CONFIG = {
+    "host": "localhost",
+    "port": 5432,
+    "database": "orcr_data",
+    "user": "postgres",
+    "password": "mysecretpassword"
+}
+
+class ORCR_Retriever:
+
+    def _set_window(self, category):
         c=["OPEN","OBC-NCL","GEN-EWS","SC","ST"]
         if category in c:
             self.low=s[c.index(category)]
@@ -21,6 +22,15 @@ class ORCR_Retriever:
         else:
             self.low=25
             self.high=90
+
+    async def runa(self,ja_rank,category,gender):#for advanced rank
+        conn = await asyncpg.connect(**DB_CONFIG)
+        values = await conn.fetch(
+            "SELECT * FROM seat_allocation WHERE seat_type =$1 AND gender=$2 AND rank='adv'",category,gender 
+        )
+
+        l=[]
+        self._set_window(category)
         for row in values:
             r=row["opening_rank"]
             cr=row["closing_rank"]
@@ -36,13 +46,12 @@ class ORCR_Retriever:
         return p
     
     async def runm(self,jm_rank,category,gender): #for mains rank
-        conn = await asyncpg.connect(user='postgres', password='postgres',
-                                    database='orcr_data', host='127.0.0.1',port=5555)
+        conn = await asyncpg.connect(**DB_CONFIG)
         values = await conn.fetch(
             "SELECT * FROM seat_allocation WHERE seat_type =$1 AND gender=$2 AND rank='mains'",category,gender 
-        
         )
         l=[]
+        self._set_window(category)
         for row in values:
             r=row["opening_rank"]
             cr=row["closing_rank"]
@@ -56,15 +65,12 @@ class ORCR_Retriever:
         p=sorted(l,key=lambda x:x["Opening Rank"],reverse=False)
         await conn.close()
         return p
-        
-        
     
 def main():
     retriever=ORCR_Retriever()
     options=asyncio.run(retriever.runa(20,"ST(PwD)","Gender-Neutral"))
     print(options)
     options=asyncio.run(retriever.runm(20,"OPEN(PwD)","Gender-Neutral"))
-
     print(options)
 
 if __name__== "__main__":
