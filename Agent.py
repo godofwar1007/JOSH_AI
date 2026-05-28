@@ -1,30 +1,34 @@
 import asyncio
+import asyncpg
 import uuid
 import os
 import itertools
 import httpx  
-from typing import TypedDict, Annotated, Literal
+from typing import TypedDict, Annotated, Literal,cast,Optional
 from contextlib import asynccontextmanager
-from placement import placement_Retriever
+from placement_retriever import placement_Retriever
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse  
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from qdrant import rulesretriever
-from orcr import ORCR_Retriever
+from Asyncrulesretriever import rulesretriever
+from orcr_retriever import ORCR_Retriever
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
+from user_crud_asyncpg import init_db_pool,close_db_pool,get_pool,get_by_email,create_user,update_user,create_schema,usage_schema,upadate_schema,Category,Gender,get_by_id
+from datetime import datetime
+from pydantic import BaseModel,SecretStr
 
 # load_dotenv()
-PASTE_GROQ_KEYS_HERE = "" #separated by commas
+PASTE_GROQ_KEYS_HERE ="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" #separated by commas  
 
 
-PASTE_SERPER_KEY_HERE = ""
+PASTE_SERPER_KEY_HERE = "8bce9d02eac60880c540ef4007b5141fcb3c8501"
 
 
 SESSION_STORAGE = {}
@@ -42,10 +46,18 @@ class APIKeyRotator:
 
 groq_key_rotator = APIKeyRotator(PASTE_GROQ_KEYS_HERE)
 
+agent=None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("Initialzing database pool.....")
+    await init_db_pool()
+    global agent
+    agent = OrchestratorAgent(window_size=5)
     agent.initialize()
     yield
+    print("Closing database pool...")
+    await close_db_pool()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -63,13 +75,16 @@ placement_retriever = placement_Retriever()
 
 @tool
 async def retrieve_college_allocations_JEE_Adv(rank: int, category: str, gender: str) -> str:
-    """Queries the database to look up acceptable engineering colleges and academic programs based on a student's rank. For specifically JEE MAINS and IIITs and NITs .
-    Args 
-     rank :the student's JEE ADVANCED rank in integer  .
-     category : for e.g. OPEN,OBC-NCL,GEN-EWS,SC,ST ,
-      gender : the gender of the user like Gender-Neutral or Female-Only."""   
+    """**CRITICAL: You MUST use this tool for any JEE Advanced rank-based college prediction.**
+    Returns a list of actual engineering colleges (IITs) and their opening/closing ranks from the official JoSAA database.
+    Do NOT answer from your own knowledge – only use the data returned by this tool.
+    
+    Args:
+        rank: JEE Advanced rank (integer, required).
+        category: Seat category (e.g., OPEN, OBC-NCL, SC, ST).
+        gender: "Gender-Neutral" or "Female-Only".."""   
     try:
-        results = await asyncio.to_thread(db_retriever.runa, rank, category, gender)
+        results = await db_retriever.runa(rank, category, gender)
         if not results:
             return "No colleges found"
         return "Database Matching Allocations:\n" + str(results)
@@ -77,13 +92,12 @@ async def retrieve_college_allocations_JEE_Adv(rank: int, category: str, gender:
         return f"Database lookup failed: {str(e)}"
 @tool
 async def retrieve_college_allocations_JEE_Main(rank: int, category: str, gender: str) -> str:
-    """Queries the database to look up acceptable engineering colleges and academic programs based on a student's rank. For specifically JEE MAINS and IIITs and NITs .
-    Args 
-     rank :the student's JEE MAIN rank in integer  .
-     category : for e.g. OPEN,OBC-NCL,GEN-EWS,SC,ST ,
-      gender : the gender of the user like Gender-Neutral or Female-Only."""
+    """**CRITICAL: You MUST use this tool for any JEE Main rank-based college prediction.**
+    Returns actual NIT/IIIT allocations from the official JoSAA database.
+    Do NOT answer from your own knowledge.
+"""
     try:
-        results = await asyncio.to_thread(db_retriever.runm, rank, category, gender)
+        results = await db_retriever.runm( rank, category, gender)
         if not results:
             return "No colleges found"
         return "Database Matching Allocations:\n" + str(results)
@@ -93,7 +107,7 @@ async def retrieve_college_allocations_JEE_Main(rank: int, category: str, gender
 async def placement_data(institute: str) -> str:
     """Fetches the latest placement statistics for a specified institute from the database."""
     try :
-        results = await asyncio.to_thread(placement_retriever.run , institute)
+        results = await placement_retriever.run(institute)
         s = ""
         for item in results :
             s = s+ item
@@ -165,8 +179,9 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     short_term_memory: list  
     session_id: str
-    user_id: str
+    user_id: int
     current_input: str
+    summary:str
 
 class OrchestratorAgent:
     def __init__(self, window_size = 5):
@@ -174,6 +189,7 @@ class OrchestratorAgent:
         self.llm_pool = None 
         self.graph = None 
         self.ws = window_size
+        self.summarizer=None
 
     def initialize(self):
              
@@ -195,6 +211,14 @@ class OrchestratorAgent:
             llm_instances.append(instance)
             
         self.llm_pool = itertools.cycle(llm_instances)
+
+        try:
+            self.summarizer = ChatGroq(model="llama3-70b-8192", temperature=0, groq_api_key=keys[0])
+        except Exception as e:
+            print(f"Summarizer init failed: {e}. Using main LLM.")
+            self.summarizer = ChatGroq(model="openai/gpt-oss-120b", temperature=0, groq_api_key=keys[0])
+
+
         print(f"Successfully initialized LLM Pool with {len(llm_instances)} distinct API connections.")
         self.graph = self._build_graph()
 
@@ -203,28 +227,69 @@ class OrchestratorAgent:
         builder.add_node("load_memory", self._load_memory_node)
         builder.add_node("agent", self._agent_node)
         builder.add_node("tools", self._tools_node)
+        builder.add_node("save_memory", self.save_memory_node) 
         
         builder.add_edge(START, "load_memory")
         builder.add_edge("load_memory", "agent")
         builder.add_conditional_edges(
             "agent",
             self._route_after_agent,
-            {"tools": "tools", END: END}
+            {"tools": "tools", "save_memory":"save_memory"}
         )
         builder.add_edge("tools", "agent")
+        builder.add_edge("save_memory", END)
         return builder.compile()
 
-    def _load_memory_node(self, state: AgentState) -> dict:
-        system_prompt = """You are a highly capable AI assistant with access to web search for both Text and Images.
-        INSTRUCTIONS:
-        1. Use `search_google_images` when the user wants an image. Format it cleanly like: [Image Link](url)
-        2. Use `search_web_serper` for live news or current events.
-        3. Give short, crisp, and to-the-point answers. Do not elaborate unless specifically asked.
-        4. If someone asks about IIT Indore, welcome them with sweet words as you are the AI hosted by IIT Indore.
-        5. If asked to search about Opening and Closing ranks of any IIT and any branch, use retrieve_college_allocations.
+    async def _load_memory_node(self, state: AgentState) -> dict:
+        user_profile=None
+        pool=get_pool()
+        if pool is not None:
+            async with pool.acquire() as conn:
+                user_profile=await get_by_id(cast(asyncpg.Connection,conn),state["user_id"])
+
+        if user_profile:
+                user_info = f"""
+        - Name: {user_profile.name}
+        - Advanced Rank: {user_profile.adv_rank}
+        - Category: {user_profile.category.value}
+        - Gender: {user_profile.gender.value}
+        - Preferred Branches: {', '.join(user_profile.preferred_branches) if user_profile.preferred_branches else 'None'}
+        """
+        else:
+           user_info = "\n- User not found. Please register first."
+                
+
+
+        system_prompt = f"""
+        
+        USER PROFILE = {user_info}
+
+        **STRICT RULES – YOU MUST FOLLOW THESE**:
+
+        1. **College Predictions (JEE Advanced)**:
+        - If the user asks for college predictions based on rank, you MUST call `retrieve_college_allocations_JEE_Adv`.
+        - NEVER answer from your own knowledge. The tool returns the only correct data.
+        - Present the tool's output exactly as given (do not modify or add extra rows).
+
+        2. **College Predictions (JEE Main)**:
+        - For JEE Main predictions, call `retrieve_college_allocations_JEE_Main` with the provided rank.
+
+        3. **Placement Data**: Use `placement_data`.
+
+        4. **Images**: Use `search_google_images`.
+
+        5. **JoSAA Rules**: Use `search_jossa`.
+
+        6. **Web Search**: Use `search_web_serper`.
+
+        **Formatting**: Keep answers concise. Use markdown tables only when tool returns structured data. Do not invent data.
         """
         convmsg = [SystemMessage(content=system_prompt)]
-        for item in state.get("short_term_memory", [])[-5:]:
+
+        if state.get("summary"):
+            convmsg.append(SystemMessage(content=f"Previous conversation summary:\n{state['summary']}"))
+
+        for item in state.get("short_term_memory", [])[-10:]:
             if item.get("role") == "user":
                 convmsg.append(HumanMessage(content=item["content"]))
             elif item.get("role") == "ai":
@@ -256,52 +321,186 @@ class OrchestratorAgent:
                 
         return {"messages": tool_results}
     
-    def _route_after_agent(self, state: AgentState) -> Literal["tools", END]:
+    def _route_after_agent(self, state: AgentState) -> Literal["tools", "save_memory"]:
         last_message = state["messages"][-1]
-        return "tools" if hasattr(last_message, "tool_calls") and last_message.tool_calls else END
+        return "tools" if hasattr(last_message, "tool_calls") and last_message.tool_calls else "save_memory"
+    
+    async def save_memory_node(self,state:AgentState) -> dict:
+        print("\n[SAVE MEMORY NODE]")
+        final_response=""
+        for msg in reversed(state["messages"]):
+            if isinstance(msg,AIMessage) and msg.content:
+                final_response=msg.content
+                break
+
+        current_mem = state.get("short_term_memory", [])
+        current_mem.append({"role": "user", "content": state["current_input"]})
+        current_mem.append({"role": "ai", "content": final_response})
+
+        max_messages = 12
+        old_summary = state.get("summary", "")
+        new_summary = old_summary
+         
+        if len(current_mem) > max_messages:
+            keep = len(current_mem) // 2
+            deleted = current_mem[:-keep]
+            remaining = current_mem[-keep:]
+            new_summary = await self.summarize_messages(deleted, old_summary)
+            current_mem = remaining
+            print(f"   Trimmed memory, kept {len(remaining)} messages.")
+        else:
+            new_summary = old_summary 
+
+        pool=get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                user=await get_by_id(cast(asyncpg.Connection, conn), state["user_id"])
+
+                if user:
+                    new_usage = usage_schema(
+                        queries_today=user.usage.queries_today + 1,
+                        cooldown_until=user.usage.cooldown_until,
+                        last_query=datetime.now()
+                    )
+                    update_data = upadate_schema(usage=new_usage)
+                    await update_user(cast(asyncpg.Connection, conn), user.email, update_data)
+
+        return {
+            "short_term_memory": current_mem,
+            "summary": new_summary,
+            "final_response": final_response
+        }
+    
+    async def summarize_messages(self,messages:list[dict],existing_summary:str)-> str:
+
+        if not messages:
+            return existing_summary
+        conv = ""
+        for msg in messages:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            conv += f"{role}: {msg['content']}\n"
+
+        prompt = f"""Previous summary: {existing_summary if existing_summary else 'None'}
+
+                New conversation excerpt:
+                {conv}
+
+                Produce a concise summary (max 200 tokens) integrating old and new."""
+        try:
+            response = await self.summarizer.ainvoke([
+                SystemMessage(content="You are a summarisation assistant."),
+                HumanMessage(content=prompt)
+            ])
+            content = response.content
+            if isinstance(content,list):
+                content=' '.join(str(part) for part in content)
+            return content.strip()
+        
+        except Exception as e:
+            print(f"Summarization failed: {e}")
+            return existing_summary
+
+    async def chat(self, user_message: str, user_id: int, session_id: str,
+                   short_term_memory: list, summary: str) -> dict:
+        initial_state = {
+            "messages": [],
+            "short_term_memory": short_term_memory,
+            "session_id": session_id,
+            "user_id": user_id,
+            "current_input": user_message,
+            "summary": summary
+        }
+        final_state = await self.graph.ainvoke(cast(AgentState,initial_state))
+        return {
+            "updated_memory": final_state.get("short_term_memory", []),
+            "new_summary": final_state.get("summary", ""),
+            "final_response": final_state.get("final_response", "")
+        }        
+
+
+    
 
     def get_stream(self, initial_state: dict):
         return self.graph.astream(initial_state, stream_mode="messages")
 
 agent = OrchestratorAgent(window_size=5)
 
+class ChatRequest(BaseModel):
+    query: str
+    email: str
+    session_id: Optional[str] = "default_session"
+    name: Optional[str] = None
+    adv_rank: Optional[int] = None
+    mains_rank: Optional[int] = None
+    category: Optional[str] = "OPEN"
+    gender: Optional[str] = "Gender-Neutral"
 
 @app.post("/chat")
-async def joshai(
-    query: str, 
-    username: str = Query(..., description="Unique user identification name required to access chat"),
-    session_id: str = Query(default="default_session")
+async def joshai(request:ChatRequest
 ):    
-    cleaned_username = username.strip()
-    if not cleaned_username or len(cleaned_username) < 3:
-        raise HTTPException(
-            status_code=400, 
-            detail="Access Denied: A valid, unique username (minimum 3 characters) must be provided."
-        )
+    if agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialised")
+    pool = get_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database not ready")
+    
+    # creating user 
+    async with pool.acquire() as conn:
+        user = await get_by_email(conn, request.email)
+        if user is None:
+            usage = usage_schema(queries_today=0)
+            try:
+                cat_enum = Category(request.category)
+            except ValueError:
+                cat_enum = Category.OPEN
+            try:
+                gen_enum = Gender(request.gender)
+            except ValueError:
+                gen_enum = Gender.male
+            user_data = create_schema(
+                name=request.name or request.email.split("@")[0],
+                email=request.email,
+                adv_rank=request.adv_rank or 0,
+                mains_rank=request.mains_rank,
+                category=cat_enum,
+                gender=gen_enum,
+                preferred_branches=[],
+                usage=usage,
+                short_term_memory=[],
+                summary=""
+            )
+            user = await create_user(conn, user_data)
+            print(f"Created new user: {user.name} (id={user.id})")
+        else:
+            print(f"Existing user: {user.name} (id={user.id})")
+        user_id = user.id
+        short_term_memory = user.short_term_memory or []
+        summary = user.summary or ""
 
-    storage_key = f"{cleaned_username}_{session_id}"
-    
-    global SESSION_STORAGE
-    history = SESSION_STORAGE.get(storage_key, [])
-    
     initial_state = {
-        "messages": [],
-        "short_term_memory": list(history),
-        "session_id": session_id,
-        "user_id": cleaned_username, 
-        "current_input": query,
+    "messages": [],
+    "short_term_memory": short_term_memory,
+    "session_id": request.session_id,
+    "user_id": user_id,
+    "current_input": request.query,
+    "summary": summary
     }
-
+        
     async def token_streamer():
-        full_reply = ""
+        
         async for message, metadata in agent.get_stream(initial_state):
             if isinstance(message, AIMessage) and metadata.get("langgraph_node") == "agent":
-                if message.content:
-                    full_reply += message.content
-                    yield message.content
-
-        history.append({"role": "user", "content": query})
-        history.append({"role": "ai", "content": full_reply})
-        SESSION_STORAGE[storage_key] = history[-10:]  
+                content = message.content
+                if isinstance(content, list):
+                    content = ' '.join(str(part) for part in content)
+                if content:
+                    yield content
 
     return StreamingResponse(token_streamer(), media_type="text/plain")
+     
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    
