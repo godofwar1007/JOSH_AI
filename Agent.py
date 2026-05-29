@@ -12,8 +12,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from Aysncrulesretriever import rulesretriever
-from orcr_retriever import ORCR_Retriever
+from qdrant import rulesretriever
+from orcr import ORCR_Retriever
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_groq import ChatGroq
@@ -266,6 +266,7 @@ class OrchestratorAgent:
             user_info = f"""
 - Name: {user_profile.name}
 - Advanced Rank: {user_profile.adv_rank}
+- Mains Rank: {user_profile.mains_rank}
 - Category: {user_profile.category.value}
 - Gender: {user_profile.gender.value}
 - Preferred Branches: {', '.join(user_profile.preferred_branches) if user_profile.preferred_branches else 'None'}
@@ -274,6 +275,7 @@ class OrchestratorAgent:
             user_info = "\n- User not found. Please register first."
 
         system_prompt = f"""
+
 USER PROFILE = {user_info}
 
 **STRICT RULES – YOU MUST FOLLOW THESE**:
@@ -283,14 +285,22 @@ USER PROFILE = {user_info}
    - DO NOT ask the user for their rank again – it is already provided in the profile.
    - Example: if the profile shows `Advanced Rank: 1500`, `Category: OPEN`, `Gender: Gender-Neutral`, call the tool with those exact values.
    - NEVER answer from your own knowledge. The tool returns the only correct data.
-   - Present the tool's output exactly as given (do not modify or add extra rows).
 
 2. **College Predictions (JEE Main)**:
    - Similar rule – use the user's `mains_rank` if available, otherwise inform the user.
 
 3. **Other tools** (placement, images, rules, web search) – use as before.
 
-**Formatting**: Keep answers concise. Use markdown tables only when tool returns structured data.
+**STRICT FORMATTING RULES**:
+- When a tool returns college allocation data (a list of records), you MUST render it as a markdown table. NEVER dump raw JSON or Python dicts.
+- The markdown table must have these exact columns: | Institute | Academic Program | Opening Rank | Closing Rank | Allotted On |
+- Every row from the tool result must appear as a table row. Do not skip or summarize rows.
+- Example table format:
+| Institute | Academic Program | Opening Rank | Closing Rank | Allotted On |
+|-----------|-----------------|--------------|--------------|-------------|
+| IIT Bombay | Computer Science and Engineering (4 Years B.Tech) | 1 | 66 | JEE Advanced |
+- Before the table, add one line: "College options for your JEE Advanced rank (rank, category, gender):"
+- Keep all other answers concise prose.
 """
         convmsg = [SystemMessage(content=system_prompt)]
         if state.get("summary"):
