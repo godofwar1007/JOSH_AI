@@ -4,8 +4,8 @@ import asyncpg
 
 class placement_Retriever:
     async def run(self,institute):
-        conn = await asyncpg.connect(user='postgres', password='postgres',
-                                    database='orcr_data', host='127.0.0.1',port=5555)
+        conn = await asyncpg.connect(user='postgres', password='parth@1007',
+                                    database='orcr_data', host='josh-ai-db.postgres.database.azure.com',port=5432,ssl='require')
         values = await conn.fetch(
             "SELECT * FROM iit_placements WHERE institute =$1",institute
         
