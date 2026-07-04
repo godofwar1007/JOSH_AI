@@ -4,6 +4,16 @@ An AI-powered conversational assistant for **JoSAA counselling** — helping JEE
 
 Built by **Parth Pawar**, **Shiva Dubey**, and **Mayank Khoria** at Cynaptics Club, IIT Indore.
 
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge)
+![Groq](https://img.shields.io/badge/Groq-F55036?style=for-the-badge)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![Qdrant](https://img.shields.io/badge/Qdrant-DC244C?style=for-the-badge)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Azure](https://img.shields.io/badge/Azure-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)
+
 ---
 
 ## Overview
@@ -153,4 +163,4 @@ Built by [Parth Pawar](https://www.linkedin.com/), [Shiva Dubey](https://www.lin
 
 ## License
 
-Not yet decided
+Not yet decided 
