@@ -16,8 +16,8 @@ for i in dic:
     docs.append(doc)
 
 
-api="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6MjBhZWUyOWYtMDU5OC00OGM0LWJkMDMtNGU4YTE3MGFiMDEzIn0.gJ9hIQCNvLleJydfDp0PrWVSZE5R7GAbi5cKI5f5GCM"
-url="https://3463a70a-212e-4ee7-b027-a65de3c43055.us-east4-0.gcp.cloud.qdrant.io"
+api="QDRANT-API-KEY"
+url="QDRANT-URL"
 model=SentenceTransformer("all-MiniLM-L6-v2")
 
 payloads=[]
