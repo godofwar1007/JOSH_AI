@@ -3,7 +3,7 @@ from pymongo.server_api import ServerApi
 import json
 
 
-uri = "mongodb+srv://mayankkhoria2007_db_user:WNcDEuR6gw3VcfQ6@cluster0.kuldc5t.mongodb.net/?appName=Cluster0"
+uri = "MONGO-URI"
 
 
 # Create a MongoClient with a MongoClientOptions object to set the Stable API version
