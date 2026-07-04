@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from qdrant import RulesRetriever
+from Asyncrulesretriever import RulesRetriever
 from Postgres.orcr_retriever import ORCR_Retriever
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
