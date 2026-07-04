@@ -10,12 +10,6 @@ import json
 
 
 DB_CONFIG = {
-    "host": "josh-ai-db.postgres.database.azure.com",
-    "port": 5432,
-    "database": "orcr_data",
-    "user": "postgres",
-    "password": "parth@1007",
-    "ssl": "require"
 }
 pool = None
 
