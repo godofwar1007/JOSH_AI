@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from qdrant import RulesRetriever
-from orcr import ORCR_Retriever
+from Postgres.orcr_retriever import ORCR_Retriever
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_groq import ChatGroq
