@@ -6,7 +6,7 @@ import itertools
 import httpx
 from typing import TypedDict, Annotated, Literal, cast, Optional
 from contextlib import asynccontextmanager
-from placement import placement_Retriever
+from Postgres.placement_retriever import placement_Retriever
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
